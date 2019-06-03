@@ -3,7 +3,9 @@ import torch.nn as nn
 import numpy as np
 
 
-__all__ = ['FixupResNet', 'fixup_resnet20', 'fixup_resnet32', 'fixup_resnet44', 'fixup_resnet56', 'fixup_resnet110', 'fixup_resnet1202']
+__all__ = ['FixupResNet', 'FixupResNetBN', 'fixup_resnet20', 'fixup_resnet32',
+           'fixup_resnet32bn', 'fixup_resnet44', 'fixup_resnet56',
+           'fixup_resnet110', 'fixup_resnet1202']
 
 
 def conv3x3(in_planes, out_planes, stride=1):
@@ -99,6 +101,61 @@ class FixupResNet(nn.Module):
         return x
 
 
+class FixupResNetBN(nn.Module):
+
+    def __init__(self, block, layers, num_classes=10):
+        super(FixupResNetBN, self).__init__()
+        self.num_layers = sum(layers)
+        self.inplanes = 16
+        self.conv1 = conv3x3(3, 16)
+        self.bias1 = nn.Parameter(torch.zeros(1))
+        self.relu = nn.ReLU(inplace=True)
+        self.layer1 = self._make_layer(block, 16, layers[0])
+        self.layer2 = self._make_layer(block, 32, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 64, layers[2], stride=2)
+        self.bn = nn.BatchNorm2d(64) # non-default
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.bias2 = nn.Parameter(torch.zeros(1))
+        self.fc = nn.Linear(64, num_classes)
+
+        for m in self.modules():
+            if isinstance(m, FixupBasicBlock):
+                nn.init.normal_(m.conv1.weight, mean=0, std=np.sqrt(2 / (m.conv1.weight.shape[0] * np.prod(m.conv1.weight.shape[2:]))) * self.num_layers ** (-0.5))
+                nn.init.constant_(m.conv2.weight, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.constant_(m.weight, 0)
+                nn.init.constant_(m.bias, 0)
+
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1:
+            downsample = nn.AvgPool2d(1, stride=stride)
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes
+        for _ in range(1, blocks):
+            layers.append(block(planes, planes))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.relu(x + self.bias1)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+
+        x = self.bn(x)
+
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x + self.bias2)
+
+        return x
+
+
 def fixup_resnet20(**kwargs):
     """Constructs a Fixup-ResNet-20 model.
 
@@ -112,6 +169,15 @@ def fixup_resnet32(**kwargs):
 
     """
     model = FixupResNet(FixupBasicBlock, [5, 5, 5], **kwargs)
+    return model
+
+
+def fixup_resnet32bn(**kwargs):
+    """Constructs a Fixup-ResNet-32 model with one BN layer to match
+    Andy Brock implementation.
+
+    """
+    model = FixupResNetBN(FixupBasicBlock, [5, 5, 5], **kwargs)
     return model
 
 
@@ -144,4 +210,4 @@ def fixup_resnet1202(**kwargs):
 
     """
     model = FixupResNet(FixupBasicBlock, [200, 200, 200], **kwargs)
-    return model    
+    return model
