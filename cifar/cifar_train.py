@@ -27,9 +27,15 @@ model_names = sorted(name for name in models.__dict__
     and callable(models.__dict__[name]))
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
-parser.add_argument('-a', '--arch', metavar='ARCH', default='fixup_resnet110', choices=model_names, help='model architecture: ' +
+parser.add_argument('-a', '--arch', metavar='ARCH', default='fixup_resnet110',
+                    choices=model_names, help='model architecture: ' +
                         ' | '.join(model_names) + ' (default: fixup_resnet110)')
-parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
+parser.add_argument("--resume", default="", type=str,
+                    help="path to latest checkpoint (default: none)")
+parser.add_argument('--dataroot', help='path to dataset',
+                    default='/scratch/ssd/data')
+parser.add_argument('--logdir', help="path to store checkpoints",
+                    default='/scratch/ssd/logs/bn-robust/cifar10/zhang-fixup')
 parser.add_argument('--sess', default='mixup_default', type=str, help='session id')
 parser.add_argument('--seed', default=0, type=int, help='rng seed')
 parser.add_argument('--alpha', default=1., type=float, help='interpolation strength (uniform=1., ERM=0.)')
@@ -72,30 +78,35 @@ transform_test = transforms.Compose([
     transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
 ])
 
-trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
+trainset = torchvision.datasets.CIFAR10(root=args.dataroot, train=True,
+                                        download=True, transform=transform_train)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size,
+                                          shuffle=True, num_workers=2)
 
-testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
-testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
+testset = torchvision.datasets.CIFAR10(root=args.dataroot, train=False,
+                                       download=True, transform=transform_test)
+testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size,
+                                         shuffle=False, num_workers=2)
 
 classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
 # Model
 if args.resume:
-    # Load checkpoint.
-    print('==> Resuming from checkpoint..')
-    assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-    checkpoint_file = './checkpoint/ckpt.t7.' + args.sess + '_' + str(args.seed)
-    checkpoint = torch.load(checkpoint_file)
-    net = checkpoint['net']
-    best_acc = checkpoint['acc']
-    start_epoch = checkpoint['epoch'] + 1
-    torch.set_rng_state(checkpoint['rng_state'])
+    if os.path.isfile(args.resume):
+        # Load checkpoint.
+        print('==> Resuming from checkpoint..')
+        #checkpoint_file = os.path.join(args.resume, 'checkpoint/ckpt.t7.') + \
+        #                  args.sess + '_' + str(args.seed)
+        checkpoint = torch.load(args.resume)
+        net = checkpoint['net']
+        best_acc = checkpoint['acc']
+        start_epoch = checkpoint['epoch'] + 1
+        torch.set_rng_state(checkpoint['rng_state'])
 else:
     print("=> creating model '{}'".format(args.arch))
     net = models.__dict__[args.arch]()
 
-result_folder = './results/'
+result_folder = os.path.join(args.logdir, 'results/')
 if not os.path.exists(result_folder):
     os.makedirs(result_folder)
 
@@ -114,11 +125,11 @@ parameters_bias = [p[1] for p in net.named_parameters() if 'bias' in p[0]]
 parameters_scale = [p[1] for p in net.named_parameters() if 'scale' in p[0]]
 parameters_others = [p[1] for p in net.named_parameters() if not ('bias' in p[0] or 'scale' in p[0])]
 optimizer = optim.SGD(
-        [{'params': parameters_bias, 'lr': args.base_lr/10.}, 
-        {'params': parameters_scale, 'lr': args.base_lr/10.}, 
-        {'params': parameters_others}], 
-        lr=base_learning_rate, 
-        momentum=0.9, 
+        [{'params': parameters_bias, 'lr': args.base_lr/10.},
+        {'params': parameters_scale, 'lr': args.base_lr/10.},
+        {'params': parameters_others}],
+        lr=base_learning_rate,
+        momentum=0.9,
         weight_decay=args.decay)
 
 # Training
@@ -190,9 +201,10 @@ def checkpoint(acc, epoch):
         'epoch': epoch,
         'rng_state': torch.get_rng_state()
     }
-    if not os.path.isdir('checkpoint'):
-        os.mkdir('checkpoint')
-    torch.save(state, './checkpoint/' + args.arch + '_' + args.sess + '_' + str(args.seed) + '.ckpt')
+    if not os.path.isdir(os.path.join(args.logdir, 'checkpoint/')):
+        os.mkdir(os.path.join(args.logdir, 'checkpoint/'))
+    torch.save(state, os.path.join(args.logdir, 'checkpoint/') +
+               args.arch + '_' + args.sess + '_' + str(args.seed) + '.ckpt')
 
 def adjust_learning_rate(optimizer, epoch):
     """decrease the learning rate at 100 and 150 epoch"""
