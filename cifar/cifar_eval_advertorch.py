@@ -1,4 +1,4 @@
-'''Train CIFAR10 with PyTorch.'''
+'''Eval CIFAR10 (PGD) with PyTorch.'''
 from __future__ import print_function
 
 import torch
