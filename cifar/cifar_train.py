@@ -34,13 +34,13 @@ parser.add_argument("--resume", default="", type=str,
                     help="path to latest checkpoint (default: none)")
 parser.add_argument('--dataroot', help='path to dataset',
                     default='/scratch/ssd/data')
-parser.add_argument('--logdir', help="path to store checkpoints",
-                    default='/scratch/ssd/logs/bn-robust/cifar10/zhang-fixup')
+parser.add_argument('--logdir', help="path to store checkpoints")
+                    #default='/scratch/ssd/logs/bn-robust/cifar10/zhang-fixup')
 parser.add_argument('--sess', default='mixup_default', type=str, help='session id')
 parser.add_argument('--seed', default=0, type=int, help='rng seed')
-parser.add_argument('--alpha', default=1., type=float, help='interpolation strength (uniform=1., ERM=0.)')
+parser.add_argument('--alpha', default=0., type=float, help='interpolation strength (uniform=1., ERM=0.)')
 parser.add_argument('--sgdr', action='store_true', help='use SGD with cosine annealing learning rate and restarts')
-parser.add_argument('--decay', default=1e-4, type=float, help='weight decay (default=1e-4)')
+parser.add_argument('--decay', default=5e-4, type=float, help='weight decay (default=1e-4)')
 parser.add_argument('--batchsize', default=128, type=int, help='batch size per GPU (default=128)')
 parser.add_argument('--n_epoch', default=200, type=int, help='total number of epochs')
 parser.add_argument('--base_lr', default=0.1, type=float, help='base learning rate (default=0.1)')
