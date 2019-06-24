@@ -2,12 +2,40 @@
 as in **Batch Norm is a Cause of Adversarial Vulnerability**
 
 To evaluate a checkpoint on adversarial examples:
-You will need to `pip install advertorch`, then
+
+- You will need to `pip install advertorch`
+
+To evaluate a pre-trained batch-normalized ResNet110 (with mixup disabled, and weight decay 1e-4) from the `./ckpt/` folder:
 
 ```
- CUDA_VISIBLE_DEVICES=0 python cifar_eval_advertorch.py --dataroot /scratch/gallowaa/cifar10 --resume /scratch/gallowaa/logs/bn-robust/cifar10/zhang-fixup/checkpoint/fixup_resnet32_benchmark_resnet32_22222.ckpt -a fixup_resnet32
- ```
-The script is set for PGD examples, but see [AdverTorch docs](https://github.com/BorealisAI/advertorch) to test other types).
+CUDA_VISIBLE_DEVICES=0 python cifar_eval_advertorch.py --dataroot /scratch/$USER/cifar10 --resume ckpt/resnet110_benchmark_resnet110_wd1e-4_11111.ckpt -a resnet110
+...
+(Output)
+99.954% (49977/50000) train
+92.540% (9254/10000) clean test
+59.990% (5999/10000) awgn test (deterministic because seeded)
+ 7.500% (750/10000) pgd linf test
+59.420% (5942/10000) pgd l2 test
+```
+To evaluate a pre-trained unnormalized ResNet110 (with the same hyperparameters):
+```
+CUDA_VISIBLE_DEVICES=0 python cifar_eval_advertorch.py --dataroot /scratch/$USER/cifar10 -a resnet110 --resume ckpt/resnet110_wd1e-4_11111.ckpt 
+...
+(Output)
+99.976% (49988/50000) train
+93.190% (9319/10000) clean test
+76.350% (7635/10000) awgn test 
+38.560% (3856/10000) pgd linf test
+77.380% (77380/10000) 
+```
+
+For models trained from scratch over five random seeds, we have:
+- BatchNorm: 92.58 ± 0.08%, 59.0 ± 0.3%, 8.5 ± 0.3%, 60.1 ± 0.3%
+- Fixup    : 93.0 ± 0.2%, 76.3 ± 0.7%, 38.1 ± 0.7%, 77.3 ± 0.2%
+
+The differences in accuracy due to batch norm are: clean 0.5 ± 0.2%, awgn 17.2 ± 0.8%, PGD linf 29.6 ± 0.8%, PGD l2 17.1 ± 0.4%.
+ 
+See [AdverTorch docs](https://github.com/BorealisAI/advertorch) to test other kinds of adversarial inputs.
 
 To evaluate a checkpoint on CIFAR-10-C:
 
