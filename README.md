@@ -1,4 +1,28 @@
-# Fixup
+# Evaluating models 
+as in **Batch Norm is a Cause of Adversarial Vulnerability**
+
+To evaluate a checkpoint on adversarial examples:
+You will need to `pip install advertorch`, then
+
+```
+ CUDA_VISIBLE_DEVICES=0 python cifar_eval_advertorch.py --dataroot /scratch/gallowaa/cifar10 --resume /scratch/gallowaa/logs/bn-robust/cifar10/zhang-fixup/checkpoint/fixup_resnet32_benchmark_resnet32_22222.ckpt -a fixup_resnet32
+ ```
+The script is set for PGD examples, but see [AdverTorch docs](https://github.com/BorealisAI/advertorch) to test other types).
+
+To evaluate a checkpoint on CIFAR-10-C:
+
+- CIFAR-10-C can be downloaded [here](https://zenodo.org/record/2535967#.XREQUHVKgUE).
+- Supply the directory you save it in to `--dataroot`.
+- The script logs data to Google sheets by default. You can comment this out if you wish, otherwise to authorize Google sheets you will need to create a `token.pickle` file. More info can be found [here](https://developers.google.com/sheets/api/quickstart/python). You will then need to create a new spreadsheet and obtain the `sheet_id`, which is part of the sheet url like: `https://docs.google.com/spreadsheets/d/<this_is_the_sheet_id>/edit#gid=1631286911`. Finally, the script expects the sheet to have a tab called `CIFAR-10-C`, otherwise you can set this variable to "Sheet1" which is the default name.
+
+Putting this all together:
+```
+CUDA_VISIBLE_DEVICES=0 python cifar_eval_common.py -a fixup_resnet20 --resume /scratch/ssd/logs/bn-robust/cifar10/zhang-fixup/checkpoint/fixup_resnet20_benchmark_fixup_resnet20_11111.ckpt --dataroot /scratch/ssd/data/CIFAR-10-C --sheet_id <google_spreadsheet_id>
+```
+will loop through all the corruption files at each intensity, convert them to pytorch dataloaders, and evaluate the model. 
+[Here is some sample output in the spreadsheet](cifar10c_fixup.png)
+
+# Fixup (Original README)
 **A Re-implementation of Fixed-update Initialization (https://arxiv.org/abs/1901.09321). *(requires Pytorch 1.0)***
 
 **Cite as:**
