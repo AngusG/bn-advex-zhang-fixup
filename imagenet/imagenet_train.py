@@ -6,6 +6,7 @@ import time
 import warnings
 import sys
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -16,7 +17,8 @@ import torch.multiprocessing as mp
 import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.transforms as transforms
-import torchvision.datasets as datasets
+#import torchvision.datasets as datasets
+from folder2lmdb import ImageFolderLMDB
 # import torchvision.models as models
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -43,7 +45,7 @@ parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=256, type=int,
+parser.add_argument('-b', '--batch-size', default=128, type=int,
                     metavar='N',
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
@@ -142,7 +144,7 @@ def main_worker(gpu, ngpus_per_node, args):
         model = models.__dict__[args.arch](pretrained=True)
     else:
         print("=> creating model '{}'".format(args.arch))
-        model = models.__dict__[args.arch]()
+        model = models.__dict__[args.arch](num_classes=9)
 
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
@@ -174,7 +176,12 @@ def main_worker(gpu, ngpus_per_node, args):
             model = torch.nn.DataParallel(model).cuda()
 
     # define loss function (criterion) and optimizer
-    cel = nn.CrossEntropyLoss()
+    num_classes = 9  # as per super-classes from http://gradientscience.org/robust-apps.pdf
+    class_freq = np.array([3900, 6500, 27141, 5200, 147925, 6500, 26000, 23400, 11234])
+    # weight the loss by inverse class frequency
+    class_weights = torch.FloatTensor(
+        1. / num_classes * np.sum(class_freq) / class_freq)
+    cel = nn.CrossEntropyLoss(class_weights)
     criterion = lambda pred, target, lam: (-F.log_softmax(pred, dim=1) * torch.zeros(pred.size()).cuda().scatter_(1, target.data.view(-1, 1), lam.view(-1, 1))).sum(dim=1).mean()
     parameters_bias = [p[1] for p in model.named_parameters() if 'bias' in p[0]]
     parameters_scale = [p[1] for p in model.named_parameters() if 'scale' in p[0]]
@@ -207,12 +214,15 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     # Data loading code
-    traindir = os.path.join(args.data, 'train')
-    valdir = os.path.join(args.data, 'val')
+    #traindir = os.path.join(args.data, 'train')
+    #valdir = os.path.join(args.data, 'val')
+    traindir = os.path.join(args.data, 'train-restricted.lmdb')
+    #valdir = os.path.join(args.data, 'train-restricted')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
-    train_dataset = datasets.ImageFolder(
+    #train_dataset = datasets.ImageFolder(
+    train_dataset = ImageFolderLMDB(
         traindir,
         transforms.Compose([
             transforms.RandomResizedCrop(224),
@@ -229,7 +239,7 @@ def main_worker(gpu, ngpus_per_node, args):
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
-
+    '''
     val_loader = torch.utils.data.DataLoader(
         datasets.ImageFolder(valdir, transforms.Compose([
             transforms.Resize(256),
@@ -239,6 +249,7 @@ def main_worker(gpu, ngpus_per_node, args):
         ])),
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
+    '''
 
     if args.evaluate:
         validate(val_loader, model, criterion, args)
@@ -254,19 +265,19 @@ def main_worker(gpu, ngpus_per_node, args):
         train(train_loader, model, criterion, optimizer, epoch, args)
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, cel, args)
+        #acc1 = validate(val_loader, model, cel, args)
 
         # remember best acc@1 and save checkpoint
-        is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
-
+        #is_best = acc1 > best_acc1
+        #best_acc1 = max(acc1, best_acc1)
+        is_best = True
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
             save_checkpoint({
                 'epoch': epoch + 1,
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
-                'best_acc1': best_acc1,
+                #'best_acc1': best_acc1,
                 'optimizer' : optimizer.state_dict(),
             }, is_best)
 
@@ -367,10 +378,10 @@ def validate(val_loader, model, criterion, args):
     return top1.avg
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+def save_checkpoint(state, is_best, filename='restricted_checkpoint.pth.tar'):
     torch.save(state, filename)
     if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
+        shutil.copyfile(filename, 'restricted_model_best.pth.tar')
 
 
 class AverageMeter(object):
