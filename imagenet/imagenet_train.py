@@ -23,9 +23,10 @@ from folder2lmdb import ImageFolderLMDB
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-from util import mixup_data, mixup_criterion
+from util import mixup_data, mixup_criterion, accuracy, AverageMeter
 
 import models
+#import torchvision.models as models
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -52,7 +53,7 @@ parser.add_argument('-b', '--batch-size', default=128, type=int,
                          'using Data Parallel or Distributed Data Parallel')
 parser.add_argument('--base_lr', default=0.1, type=float,
                     metavar='base_lr', help='base learning rate (default=0.1)', dest='base_lr')
-parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
+parser.add_argument('--momentum', default=0., type=float, metavar='M',
                     help='momentum')
 parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)',
@@ -82,7 +83,7 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'N processes per node, which has N GPUs. This is the '
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
-parser.add_argument('--alpha', default=0.7, type=float, help='interpolation strength (uniform=1., ERM=0.)')
+parser.add_argument('--alpha', default=0., type=float, help='interpolation strength (uniform=1., ERM=0.)')
 
 best_acc1 = 0
 args = parser.parse_args()
@@ -180,9 +181,11 @@ def main_worker(gpu, ngpus_per_node, args):
     class_freq = np.array([3900, 6500, 27141, 5200, 147925, 6500, 26000, 23400, 11234])
     # weight the loss by inverse class frequency
     class_weights = torch.FloatTensor(
-        1. / num_classes * np.sum(class_freq) / class_freq)
-    cel = nn.CrossEntropyLoss(class_weights)
-    criterion = lambda pred, target, lam: (-F.log_softmax(pred, dim=1) * torch.zeros(pred.size()).cuda().scatter_(1, target.data.view(-1, 1), lam.view(-1, 1))).sum(dim=1).mean()
+        1. / num_classes * np.sum(class_freq) / class_freq).cuda(args.gpu)
+    criterion = nn.CrossEntropyLoss(class_weights)
+    #criterion = nn.CrossEntropyLoss()
+    #cel = nn.CrossEntropyLoss()
+    #criterion = lambda pred, target, lam: (-F.log_softmax(pred, dim=1) * torch.zeros(pred.size()).cuda().scatter_(1, target.data.view(-1, 1), lam.view(-1, 1))).sum(dim=1).mean()
     parameters_bias = [p[1] for p in model.named_parameters() if 'bias' in p[0]]
     parameters_scale = [p[1] for p in model.named_parameters() if 'scale' in p[0]]
     parameters_others = [p[1] for p in model.named_parameters() if not ('bias' in p[0] or 'scale' in p[0])]
@@ -200,10 +203,10 @@ def main_worker(gpu, ngpus_per_node, args):
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint['epoch']
-            best_acc1 = checkpoint['best_acc1']
-            if args.gpu is not None:
+            #best_acc1 = checkpoint['best_acc1']
+            #if args.gpu is not None:
                 # best_acc1 may be from a checkpoint from a different GPU
-                best_acc1 = best_acc1.to(args.gpu)
+                #best_acc1 = best_acc1.to(args.gpu)
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' (epoch {})"
@@ -279,7 +282,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 'state_dict': model.state_dict(),
                 #'best_acc1': best_acc1,
                 'optimizer' : optimizer.state_dict(),
-            }, is_best)
+            }, is_best, args.arch + '_wd' + str(args.wd))
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):
@@ -300,12 +303,13 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         inputs = inputs.cuda(args.gpu, non_blocking=True)
         targets = targets.cuda(args.gpu, non_blocking=True)
 
-        inputs, targets_a, targets_b, lam = mixup_data(inputs, targets, args.alpha, use_cuda=True)
+        #inputs, targets_a, targets_b, lam = mixup_data(inputs, targets, args.alpha, use_cuda=True)
 
         # compute output
         output = model(inputs)
-        loss_func = mixup_criterion(targets_a, targets_b, lam)
-        loss = loss_func(criterion, output)
+        #loss_func = mixup_criterion(targets_a, targets_b, lam)
+        #loss = loss_func(criterion, output)
+        loss= criterion(output, targets).cuda(args.gpu)
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, targets, topk=(1, 5))
@@ -384,24 +388,6 @@ def save_checkpoint(state, is_best, filename='restricted_checkpoint.pth.tar'):
         shutil.copyfile(filename, 'restricted_model_best.pth.tar')
 
 
-class AverageMeter(object):
-    """Computes and stores the average and current value"""
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
-
-
 def adjust_learning_rate(optimizer, epoch, args):
     # """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
     # lr = args.base_lr * (0.1 ** (epoch // 30))
@@ -417,23 +403,6 @@ def adjust_learning_rate(optimizer, epoch, args):
             print("adjust scalar lr.")
             scalar_lr = param_group['initial_lr'] * (0.1 ** (epoch // 30))
             param_group['lr'] = scalar_lr
-
-
-def accuracy(output, target, topk=(1,)):
-    """Computes the accuracy over the k top predictions for the specified values of k"""
-    with torch.no_grad():
-        maxk = max(topk)
-        batch_size = target.size(0)
-
-        _, pred = output.topk(maxk, 1, True, True)
-        pred = pred.t()
-        correct = pred.eq(target.view(1, -1).expand_as(pred))
-
-        res = []
-        for k in topk:
-            correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
-            res.append(correct_k.mul_(100.0 / batch_size))
-        return res
 
 
 if __name__ == '__main__':
