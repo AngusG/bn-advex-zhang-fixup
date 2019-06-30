@@ -24,7 +24,7 @@ import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from util import mixup_data, mixup_criterion, accuracy, AverageMeter
-
+from torch.autograd import Variable
 import models
 #import torchvision.models as models
 
@@ -87,8 +87,10 @@ parser.add_argument('--alpha', default=0., type=float, help='interpolation stren
 
 best_acc1 = 0
 args = parser.parse_args()
-#base_learning_rate = args.base_lr * args.batch_size / 256.
+base_learning_rate = args.base_lr #* args.batch_size / 256.
 # base_learning_rate *= torch.cuda.device_count()
+
+SCALAR_PENALTY = 1e-3
 
 def main():
     if args.seed is not None:
@@ -185,11 +187,22 @@ def main_worker(gpu, ngpus_per_node, args):
     class_weights = torch.FloatTensor(
         1. / num_classes * np.sum(class_freq) / class_freq).cuda(args.gpu)
     criterion = nn.CrossEntropyLoss(class_weights)
+    #criterion = nn.CrossEntropyLoss()
     cel = nn.CrossEntropyLoss() # for validation
+    #criterion = lambda pred, target, lam: (-F.log_softmax(pred, dim=1) * torch.zeros(pred.size()).cuda().scatter_(1, target.data.view(-1, 1), lam.view(-1, 1))).sum(dim=1).mean()
+    parameters_bias = [p[1] for p in model.named_parameters() if 'bias' in p[0]]
+    parameters_scale = [p[1] for p in model.named_parameters() if 'scale' in p[0]]
+    parameters_others = [p[1] for p in model.named_parameters() if not ('bias' in p[0] or 'scale' in p[0])]
 
-    optimizer = torch.optim.SGD(model.parameters(), args.base_lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+    #scalar_penalty = Variable(scalar_penalty, requires_grad=True)
+
+    optimizer = torch.optim.SGD(
+        [{'params': parameters_bias, 'lr': args.base_lr/10.},
+        {'params': parameters_scale, 'lr': args.base_lr/10.},
+        {'params': parameters_others}],
+        lr=base_learning_rate,
+        momentum=args.momentum,
+        weight_decay=args.weight_decay)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -256,10 +269,10 @@ def main_worker(gpu, ngpus_per_node, args):
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        adjust_learning_rate(optimizer, epoch, args)
+        #adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args)
+        train(train_loader, model, criterion, optimizer, epoch, args, parameters_scale)
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, cel, args)
@@ -269,8 +282,9 @@ def main_worker(gpu, ngpus_per_node, args):
         #best_acc1 = max(acc1, best_acc1)
         is_best = True
         ckpt_name = os.path.join('./ckpt', args.arch)
-        ckpt_name += '_lr%.e' % args.base_lr
+        ckpt_name += '_lr%.e' % base_learning_rate
         ckpt_name += '_wd%.e' % args.weight_decay
+        ckpt_name += '_sc%.e' % SCALAR_PENALTY
         ckpt_name += '.pth.tar'
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
@@ -283,7 +297,7 @@ def main_worker(gpu, ngpus_per_node, args):
             }, is_best, ckpt_name)
 
 
-def train(train_loader, model, criterion, optimizer, epoch, args):
+def train(train_loader, model, criterion, optimizer, epoch, args, parameters_scale):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -307,7 +321,13 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         output = model(inputs)
         #loss_func = mixup_criterion(targets_a, targets_b, lam)
         #loss = loss_func(criterion, output)
-        loss = criterion(output, targets).cuda(args.gpu)
+        #print('test 1')
+        scalar_penalty = 0
+        for j in range(len(parameters_scale)):
+            scalar_penalty = scalar_penalty + parameters_scale[j]**2
+        #print(scalar_penalty.item())
+
+        loss = criterion(output, targets).cuda(args.gpu) + SCALAR_PENALTY * scalar_penalty
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, targets, topk=(1, 5))
@@ -330,9 +350,9 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                   'Acc@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                  'Acc@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+                  'penalty {penalty:.3f}'.format(
                    epoch, i, len(train_loader), batch_time=batch_time,
-                   data_time=data_time, loss=losses, top1=top1, top5=top5))
+                   data_time=data_time, loss=losses, top1=top1, penalty=scalar_penalty.item()))
 
 
 def validate(val_loader, model, criterion, args):
@@ -387,10 +407,20 @@ def save_checkpoint(state, is_best, filename='restricted_checkpoint.pth.tar'):
 
 
 def adjust_learning_rate(optimizer, epoch, args):
-    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = args.base_lr * (0.1 ** (epoch // 30))
+    # """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
+    # lr = args.base_lr * (0.1 ** (epoch // 30))
+    #     for param_group in optimizer.param_groups:
+    #     param_group['lr'] = lr
+
     for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+        if param_group['initial_lr'] == base_learning_rate:
+            print("adjust non-scalar lr.")
+            lr = base_learning_rate * (0.1 ** (epoch // 30))
+            param_group['lr'] = lr
+        else:
+            print("adjust scalar lr.")
+            scalar_lr = param_group['initial_lr'] * (0.1 ** (epoch // 30))
+            param_group['lr'] = scalar_lr
 
 
 if __name__ == '__main__':

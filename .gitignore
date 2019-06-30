@@ -106,3 +106,4 @@ venv.bak/
 
 # repo specific
 token.pickle
+*.pth.tar
