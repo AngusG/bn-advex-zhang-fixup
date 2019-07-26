@@ -91,6 +91,7 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
+        x = x - x.mean(dim=(1, 2, 3)).view(x.size(0), 1, 1, 1)
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -151,4 +152,4 @@ def resnet1202(**kwargs):
 
     """
     model = ResNet(BasicBlock, [200, 200, 200], **kwargs)
-    return model    
+    return model
