@@ -17,7 +17,7 @@ import csv
 
 import models
 
-from utils import progress_bar, mixup_data, mixup_criterion
+#from utils import progress_bar, mixup_data, mixup_criterion
 
 import numpy
 import random
@@ -52,6 +52,8 @@ parser.add_argument('--base_lr', default=0.1, type=float,
                     help='base learning rate (default=0.1)')
 parser.add_argument('--pgd_train', action="store_true",
                     help="do PGD max-norm adv training")
+parser.add_argument('--print', action="store_true",
+                    help="display training data, not for headless mode")
 
 args = parser.parse_args()
 
@@ -72,6 +74,9 @@ if use_cuda:
     n_gpu = torch.cuda.device_count()
     batch_size *= n_gpu
     base_learning_rate *= n_gpu
+
+if args.print:
+    from utils import progress_bar
 
 # Data
 print('==> Preparing data..')
@@ -189,8 +194,9 @@ def train(epoch):
         """
         acc = 100. * float(correct) / float(total)
 
-        progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-            % (train_loss / (batch_idx + 1), acc, correct, total))
+        if args.print:
+            progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+                         % (train_loss / (batch_idx + 1), acc, correct, total))
 
     return (train_loss/batch_idx, acc)
 
@@ -211,9 +217,9 @@ def test(epoch):
             _, predicted = torch.max(outputs.data, 1)
             total += targets.size(0)
             correct += predicted.eq(targets.data).cpu().sum()
-
-            progress_bar(batch_idx, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                % (test_loss/(batch_idx+1), 100.*float(correct)/float(total), correct, total))
+            if args.print:
+                progress_bar(batch_idx, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+                    % (test_loss/(batch_idx+1), 100.*float(correct)/float(total), correct, total))
 
         # Save checkpoint.
         acc = 100. * float(correct) / float(total)
