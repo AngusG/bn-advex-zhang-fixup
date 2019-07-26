@@ -38,12 +38,20 @@ parser.add_argument('--logdir', help="path to store checkpoints")
                     #default='/scratch/ssd/logs/bn-robust/cifar10/zhang-fixup')
 parser.add_argument('--sess', default='mixup_default', type=str, help='session id')
 parser.add_argument('--seed', default=0, type=int, help='rng seed')
-parser.add_argument('--alpha', default=0., type=float, help='interpolation strength (uniform=1., ERM=0.)')
-parser.add_argument('--sgdr', action='store_true', help='use SGD with cosine annealing learning rate and restarts')
-parser.add_argument('--decay', default=5e-4, type=float, help='weight decay (default=1e-4)')
-parser.add_argument('--batchsize', default=128, type=int, help='batch size per GPU (default=128)')
-parser.add_argument('--n_epoch', default=200, type=int, help='total number of epochs')
-parser.add_argument('--base_lr', default=0.1, type=float, help='base learning rate (default=0.1)')
+#parser.add_argument('--alpha', default=0., type=float,
+#                    help='interpolation strength (uniform=1., ERM=0.)')
+#parser.add_argument('--sgdr', action='store_true',
+#                    help='use SGD with cosine annealing learning rate and restarts')
+parser.add_argument('--decay', default=5e-4, type=float,
+                    help='weight decay (default=1e-4)')
+parser.add_argument('--batchsize', default=128, type=int,
+                    help='batch size per GPU (default=128)')
+parser.add_argument('--n_epoch', default=200, type=int,
+                    help='total number of epochs')
+parser.add_argument('--base_lr', default=0.1, type=float,
+                    help='base learning rate (default=0.1)')
+parser.add_argument('--pgd_train', action="store_true",
+                    help="do PGD max-norm adv training")
 
 args = parser.parse_args()
 
@@ -58,6 +66,7 @@ best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 batch_size = args.batchsize
 base_learning_rate = args.base_lr * args.batchsize / 128.
+pgd_train = args.pgd_train
 if use_cuda:
     # data parallel
     n_gpu = torch.cuda.device_count()
@@ -70,12 +79,12 @@ transform_train = transforms.Compose([
     transforms.RandomCrop(32, padding=4),
     transforms.RandomHorizontalFlip(),
     transforms.ToTensor(),
-    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    #transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
 ])
 
 transform_test = transforms.Compose([
     transforms.ToTensor(),
-    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    #transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
 ])
 
 trainset = torchvision.datasets.CIFAR10(root=args.dataroot, train=True,
@@ -88,7 +97,8 @@ testset = torchvision.datasets.CIFAR10(root=args.dataroot, train=False,
 testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size,
                                          shuffle=False, num_workers=2)
 
-classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse',
+           'ship', 'truck')
 
 # Model
 if args.resume:
@@ -120,7 +130,11 @@ if use_cuda:
     print('Using CUDA..')
 
 cel = nn.CrossEntropyLoss()
-criterion = lambda pred, target, lam: (-F.log_softmax(pred, dim=1) * torch.zeros(pred.size()).cuda().scatter_(1, target.data.view(-1, 1), lam.view(-1, 1))).sum(dim=1).mean()
+'''
+criterion = lambda pred, target, lam: (
+    -F.log_softmax(pred, dim=1) * torch.zeros(pred.size()).cuda().scatter_(
+        1, target.data.view(-1, 1), lam.view(-1, 1))).sum(dim=1).mean()
+'''
 parameters_bias = [p[1] for p in net.named_parameters() if 'bias' in p[0]]
 parameters_scale = [p[1] for p in net.named_parameters() if 'scale' in p[0]]
 parameters_others = [p[1] for p in net.named_parameters() if not ('bias' in p[0] or 'scale' in p[0])]
@@ -131,6 +145,13 @@ optimizer = optim.SGD(
         lr=base_learning_rate,
         momentum=0.9,
         weight_decay=args.decay)
+
+if pgd_train:
+    from advertorch.attacks import LinfPGDAttack
+    adversary = LinfPGDAttack(
+        net, loss_fn=nn.CrossEntropyLoss(reduction="sum"), eps=8/255.,
+        nb_iter=7, eps_iter=2/255., rand_init=True, clip_min=0.,
+        clip_max=1., targeted=False)
 
 # Training
 def train(epoch):
@@ -143,23 +164,33 @@ def train(epoch):
         if use_cuda:
             inputs, targets = inputs.cuda(), targets.cuda()
         # generate mixed inputs, two one-hot label vectors and mixing coefficient
-        inputs, targets_a, targets_b, lam = mixup_data(inputs, targets, args.alpha, use_cuda)
+        '''
+        inputs, targets_a, targets_b, lam = mixup_data(
+            inputs, targets, args.alpha, use_cuda)
+        '''
+        if pgd_train:
+            inputs = adversary.perturb(inputs, targets)
         optimizer.zero_grad()
         outputs = net(inputs)
-
-        loss_func = mixup_criterion(targets_a, targets_b, lam)
-        loss = loss_func(criterion, outputs)
+        #loss_func = mixup_criterion(targets_a, targets_b, lam)
+        #loss = loss_func(criterion, outputs)
+        loss = cel(outputs, targets)
         loss.backward()
         optimizer.step()
 
         train_loss += loss.item()
         _, predicted = torch.max(outputs.data, 1)
         total += targets.size(0)
-        correct += (lam * predicted.eq(targets_a.data).float()).cpu().sum() + ((1 - lam) * predicted.eq(targets_b.data).float()).cpu().sum()
-        acc = 100.*float(correct)/float(total)
+        correct += predicted.eq(targets.view_as(predicted)).sum().item()
+        """
+        correct += (lam * predicted.eq(
+            targets_a.data).float()).cpu().sum() + ((1 - lam) * predicted.eq(
+                targets_b.data).float()).cpu().sum()
+        """
+        acc = 100. * float(correct) / float(total)
 
         progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-            % (train_loss/(batch_idx+1), acc, correct, total))
+            % (train_loss / (batch_idx + 1), acc, correct, total))
 
     return (train_loss/batch_idx, acc)
 
@@ -185,7 +216,7 @@ def test(epoch):
                 % (test_loss/(batch_idx+1), 100.*float(correct)/float(total), correct, total))
 
         # Save checkpoint.
-        acc = 100.*float(correct)/float(total)
+        acc = 100. * float(correct) / float(total)
         if acc > best_acc:
             best_acc = acc
             checkpoint(acc, epoch)
@@ -206,6 +237,7 @@ def checkpoint(acc, epoch):
     torch.save(state, os.path.join(args.logdir, 'checkpoint/') +
                args.arch + '_' + args.sess + '_' + str(args.seed) + '.ckpt')
 
+'''
 def adjust_learning_rate(optimizer, epoch):
     """decrease the learning rate at 100 and 150 epoch"""
     lr = base_learning_rate
@@ -229,16 +261,24 @@ def adjust_learning_rate(optimizer, epoch):
             else:
                 param_group['lr'] = param_group['initial_lr'] / 100.
     return lr
+'''
+def adjust_learning_rate(optimizer, epoch):
+    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
+    lr = base_learning_rate * (0.1 ** (epoch // 30))
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = param_group['lr'] * (0.1 ** (epoch // 30))
+    return lr
 
 if not os.path.exists(logname):
     with open(logname, 'w') as logfile:
         logwriter = csv.writer(logfile, delimiter=',')
         logwriter.writerow(['epoch', 'lr', 'train loss', 'train acc', 'test loss', 'test acc'])
 
-sgdr = CosineAnnealingLR(optimizer, args.n_epoch, eta_min=0, last_epoch=-1)
+#sgdr = CosineAnnealingLR(optimizer, args.n_epoch, eta_min=0, last_epoch=-1)
 
 for epoch in range(start_epoch, args.n_epoch):
     lr = 0.
+    '''
     if args.sgdr:
         sgdr.step()
         for param_group in optimizer.param_groups:
@@ -246,6 +286,8 @@ for epoch in range(start_epoch, args.n_epoch):
             break
     else:
         lr = adjust_learning_rate(optimizer, epoch)
+    '''
+    lr = adjust_learning_rate(optimizer, epoch)
     train_loss, train_acc = train(epoch)
     test_loss, test_acc = test(epoch)
     with open(logname, 'a') as logfile:
