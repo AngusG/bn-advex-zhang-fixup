@@ -87,6 +87,7 @@ class FixupResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
+        x = x - x.mean(dim=(1, 2, 3)).view(x.size(0), 1, 1, 1)
         x = self.conv1(x)
         x = self.relu(x + self.bias1)
 
