@@ -87,7 +87,20 @@ class FixupResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        x = x - x.mean(dim=(1, 2, 3)).view(x.size(0), 1, 1, 1)
+        """
+        Implements per_image_standardization, which was used to train the
+        ResNet on CIFAR-10 in Madry et el., (ICLR 2018).
+        https://github.com/tensorflow/tensorflow/blob/r1.14/tensorflow/python/
+        ops/image_ops_impl.py#L1472-L1515
+        """
+        image_mean = x.mean(dim=(1, 2, 3), keepdim=True)
+        variance = x**2 - image_mean**2
+        stddev = torch.sqrt(variance)
+        min_stddev = torch.rsqrt(torch.prod(torch.FloatTensor([x.size()[1:]]))).cuda()
+        pixel_value_scale = torch.max(stddev, min_stddev)
+        x = x - image_mean
+        x = x / pixel_value_scale
+
         x = self.conv1(x)
         x = self.relu(x + self.bias1)
 
