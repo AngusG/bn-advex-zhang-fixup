@@ -53,7 +53,7 @@ if use_cuda:
 print('==> Preparing data..')
 transform_test = transforms.Compose([
     transforms.ToTensor(),
-    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    #transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
 ])
 
 trainset = torchvision.datasets.CIFAR10(root=args.dataroot, train=True,
@@ -142,17 +142,18 @@ train_loss, train_acc = test(trainloader)
 test_loss, test_acc = test(testloader)
 test_loss, test_acc = test(testloader, do_awgn=True)
 
+BASE_EPS = 2.
 adversary_linf = LinfPGDAttack(
     net, loss_fn=nn.CrossEntropyLoss(reduction="sum"),
-    eps=0.03, nb_iter=20, eps_iter=0.003,
-    rand_init=False, clip_min=-2.0, clip_max=2.0, targeted=False)
+    eps=BASE_EPS/255., nb_iter=40, eps_iter=BASE_EPS/255. / 30.,
+    rand_init=False, clip_min=0., clip_max=1., targeted=False)
 adver_lss, adver_acc = test_adver(testloader, adversary_linf)
 print('Linf acc', adver_acc)
 
 adversary_l2 = L2PGDAttack(
     net, loss_fn=nn.CrossEntropyLoss(reduction="sum"),
-    eps=np.sqrt(3*32*32)*0.03, nb_iter=20, eps_iter=np.sqrt(3*32*32)*0.003,
-    rand_init=False, clip_min=-2.0, clip_max=2.0,
-    targeted=False)
+    eps=np.sqrt(3*32*32) * BASE_EPS/255., nb_iter=40,
+    eps_iter=np.sqrt(3*32*32) * BASE_EPS/255. / 30,
+    rand_init=False, clip_min=0., clip_max=1., targeted=False)
 adver_lss, adver_acc = test_adver(testloader, adversary_l2)
 print('L2 acc', adver_acc)
