@@ -184,7 +184,8 @@ def train(epoch):
             inputs, targets, args.alpha, use_cuda)
         '''
         if pgd_train:
-            inputs = adversary.perturb(inputs, targets)
+            if epoch > 5:
+                inputs = adversary.perturb(inputs, targets)
         optimizer.zero_grad()
         outputs = net(inputs)
         #loss_func = mixup_criterion(targets_a, targets_b, lam)
