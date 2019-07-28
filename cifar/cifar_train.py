@@ -38,6 +38,8 @@ parser.add_argument('--logdir', help="path to store checkpoints")
 parser.add_argument('--sess', default='mixup_default', type=str,
                     help='session id')
 parser.add_argument('--seed', default=0, type=int, help='rng seed')
+parser.add_argument('--sgdr', action='store_true',
+                    help='use SGD with cosine annealing learning rate and restarts')
 parser.add_argument('--decay', default=1e-4, type=float,
                     help='weight decay (default=1e-4)')
 parser.add_argument('--batchsize', default=128, type=int,
@@ -239,7 +241,7 @@ def checkpoint(acc, epoch):
     torch.save(state, os.path.join(args.logdir, 'checkpoint/') +
                args.arch + '_' + args.sess + '_' + str(args.seed) + '.ckpt')
 
-'''
+
 def adjust_learning_rate(optimizer, epoch):
     """decrease the learning rate at 100 and 150 epoch"""
     lr = base_learning_rate
@@ -270,17 +272,16 @@ def adjust_learning_rate(optimizer, epoch):
     for param_group in optimizer.param_groups:
         param_group['lr'] = param_group['lr'] * (0.1 ** (epoch // 30))
     return lr
-
+'''
 if not os.path.exists(logname):
     with open(logname, 'w') as logfile:
         logwriter = csv.writer(logfile, delimiter=',')
         logwriter.writerow(['epoch', 'lr', 'train loss', 'train acc', 'test loss', 'test acc'])
 
-#sgdr = CosineAnnealingLR(optimizer, args.n_epoch, eta_min=0, last_epoch=-1)
+sgdr = CosineAnnealingLR(optimizer, args.n_epoch, eta_min=0, last_epoch=-1)
 
 for epoch in range(start_epoch, args.n_epoch):
     lr = 0.
-    '''
     if args.sgdr:
         sgdr.step()
         for param_group in optimizer.param_groups:
@@ -288,8 +289,7 @@ for epoch in range(start_epoch, args.n_epoch):
             break
     else:
         lr = adjust_learning_rate(optimizer, epoch)
-    '''
-    lr = adjust_learning_rate(optimizer, epoch)
+    #lr = adjust_learning_rate(optimizer, epoch)
     train_loss, train_acc = train(epoch)
     test_loss, test_acc = test(epoch)
     with open(logname, 'a') as logfile:
