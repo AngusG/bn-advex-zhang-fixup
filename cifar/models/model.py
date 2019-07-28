@@ -14,8 +14,8 @@ import torch.nn.functional as F
 
 class BasicBlock(nn.Module):
     droprate = 0.0
-    use_bn = True
-    use_fixup = False
+    use_bn = False  # may need to manually set this on resume
+    use_fixup = True  # may need to manually set this on resume
     fixup_l = 12
 
     def __init__(self, in_planes, out_planes, stride):

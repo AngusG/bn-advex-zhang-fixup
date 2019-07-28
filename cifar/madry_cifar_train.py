@@ -51,6 +51,8 @@ parser.add_argument('--pgd_train', action="store_true",
                     help="do PGD max-norm adv training")
 parser.add_argument('--print', action="store_true",
                     help="display training data, not for headless mode")
+parser.add_argument('--bn', action="store_true",
+                    help="do batchnorm instead of fixup (default=fixup)")
 
 args = parser.parse_args()
 
@@ -102,8 +104,12 @@ testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size,
 classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse',
            'ship', 'truck')
 
+if args.bn:
+    arch = 'WRN-28-10-BN'
+else:
+    arch = 'WRN-28-10-Fix'
+
 # Model
-'''
 if args.resume:
     if os.path.isfile(args.resume):
         # Load checkpoint.
@@ -116,17 +122,17 @@ if args.resume:
         start_epoch = checkpoint['epoch'] + 1
         torch.set_rng_state(checkpoint['rng_state'])
 else:
-    print("=> creating model '{}'".format(args.arch))
-    net = models.__dict__[args.arch]()
-'''
-#net = WideResNet(28, 10, 10, droprate=0, use_bn=False, use_fixup=True)
-net = WideResNet(28, 10, 10, droprate=0, use_bn=True, use_fixup=False)
+    print("=> creating model '{}'".format(arch))
+    #net = models.__dict__[args.arch]()
+    if args.bn:
+        net = WideResNet(28, 10, 10, droprate=0, use_bn=True, use_fixup=False)
+    else:
+        net = WideResNet(28, 10, 10, droprate=0, use_bn=False, use_fixup=True)
 
 result_folder = os.path.join(args.logdir, 'results/')
 if not os.path.exists(result_folder):
     os.makedirs(result_folder)
 
-arch = 'WideResNet-28-10-Fix'
 logname = result_folder + arch + '_' + args.sess + '_' + str(args.seed) + '.csv'
 
 if use_cuda:
