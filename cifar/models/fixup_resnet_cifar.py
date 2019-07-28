@@ -95,6 +95,7 @@ class FixupResNet(nn.Module):
         """
         image_mean = x.mean(dim=(1, 2, 3), keepdim=True)
         variance = x**2 - image_mean**2
+        variance = self.relu(variance)  # this relu is critical for grad wrt x
         stddev = torch.sqrt(variance)
         min_stddev = torch.rsqrt(torch.prod(torch.FloatTensor([x.size()[1:]]))).cuda()
         pixel_value_scale = torch.max(stddev, min_stddev)
