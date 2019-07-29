@@ -39,8 +39,10 @@ parser.add_argument('--logdir', help="path to store checkpoints")
 parser.add_argument('--sess', default='mixup_default', type=str,
                     help='session id')
 parser.add_argument('--seed', default=0, type=int, help='rng seed')
-parser.add_argument('--decay', default=2e-4, type=float,
-                    help='weight decay (default=2e-4)')
+parser.add_argument('--sgdr', action='store_true',
+                    help='use SGD with cosine annealing learning rate and restarts')
+parser.add_argument('--decay', default=1e-4, type=float,
+                    help='weight decay (default=1e-4)')
 parser.add_argument('--batchsize', default=128, type=int,
                     help='batch size per GPU (default=128)')
 parser.add_argument('--n_epoch', default=200, type=int,
@@ -49,6 +51,13 @@ parser.add_argument('--base_lr', default=0.1, type=float,
                     help='base learning rate (default=0.1)')
 parser.add_argument('--pgd_train', action="store_true",
                     help="do PGD max-norm adv training")
+parser.add_argument('--eps', default=4, type=int,
+                    help='max epsilon to use if pgd_train is set, eps_iter \
+                    times nb_iter should exceed this value')
+parser.add_argument('--eps_iter', default=1, type=int,
+                    help='step size to use if pgd_train is set')
+parser.add_argument('--nb_iter', default=5, type=int,
+                    help='setps to use if pgd_train is set')
 parser.add_argument('--print', action="store_true",
                     help="display training data, not for headless mode")
 parser.add_argument('--bn', action="store_true",
@@ -162,9 +171,9 @@ optimizer = optim.SGD(
 if pgd_train:
     from advertorch.attacks import LinfPGDAttack
     adversary = LinfPGDAttack(
-        net, loss_fn=nn.CrossEntropyLoss(reduction="sum"), eps=8/255.,
-        nb_iter=7, eps_iter=2/255., rand_init=True, clip_min=0.,
-        clip_max=1., targeted=False)
+        net, loss_fn=nn.CrossEntropyLoss(reduction="sum"), eps=args.eps/255.,
+        nb_iter=args.nb_iter, eps_iter=args.eps_iter/255., rand_init=True,
+        clip_min=0., clip_max=1., targeted=False)
 
 print(net)
 
@@ -184,8 +193,7 @@ def train(epoch):
             inputs, targets, args.alpha, use_cuda)
         '''
         if pgd_train:
-            if epoch > 5:
-                inputs = adversary.perturb(inputs, targets)
+            inputs = adversary.perturb(inputs, targets)
         optimizer.zero_grad()
         outputs = net(inputs)
         #loss_func = mixup_criterion(targets_a, targets_b, lam)
@@ -254,7 +262,7 @@ def checkpoint(acc, epoch):
     torch.save(state, os.path.join(args.logdir, 'checkpoint/') +
                arch + '_' + args.sess + '_' + str(args.seed) + '.ckpt')
 
-'''
+
 def adjust_learning_rate(optimizer, epoch):
     """decrease the learning rate at 100 and 150 epoch"""
     lr = base_learning_rate
@@ -278,6 +286,7 @@ def adjust_learning_rate(optimizer, epoch):
             else:
                 param_group['lr'] = param_group['initial_lr'] / 100.
     return lr
+
 '''
 def adjust_learning_rate(optimizer, epoch):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
@@ -292,26 +301,26 @@ def adjust_learning_rate(optimizer, epoch):
         if epoch >= 150:
             param_group['lr'] = param_group['lr'] / 10.
     return lr
+'''
 
 if not os.path.exists(logname):
     with open(logname, 'w') as logfile:
         logwriter = csv.writer(logfile, delimiter=',')
         logwriter.writerow(['epoch', 'lr', 'train loss', 'train acc', 'test loss', 'test acc'])
 
-#sgdr = CosineAnnealingLR(optimizer, args.n_epoch, eta_min=0, last_epoch=-1)
+sgdr = CosineAnnealingLR(optimizer, args.n_epoch, eta_min=0, last_epoch=-1)
 
 for epoch in range(start_epoch, args.n_epoch):
     lr = 0.
-    '''
     if args.sgdr:
+        print('SGDR')
         sgdr.step()
         for param_group in optimizer.param_groups:
             lr = param_group['lr']
             break
     else:
         lr = adjust_learning_rate(optimizer, epoch)
-    '''
-    lr = adjust_learning_rate(optimizer, epoch)
+    #lr = adjust_learning_rate(optimizer, epoch)
     train_loss, train_acc = train(epoch)
     test_loss, test_acc = test(epoch)
     with open(logname, 'a') as logfile:
