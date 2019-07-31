@@ -41,6 +41,9 @@ parser.add_argument('--nb_iter', default=20, type=int,
 parser.add_argument('--l2', action="store_true",
                     help="do l2 norm PGD variant")
 
+parser.add_argument('--tgt', action="store_true",
+                    help="targeted attack objective (default=misclf)")
+
 args = parser.parse_args()
 
 torch.manual_seed(args.seed)
@@ -117,63 +120,76 @@ def test(dataloader, do_awgn=False):
             _, predicted = torch.max(outputs.data, 1)
             total += targets.size(0)
             correct += predicted.eq(targets.data).cpu().sum()
-            progress_bar(batch_idx, len(dataloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                % (test_loss/(batch_idx+1), 100.*float(correct)/float(total),
-                   correct, total))
-        acc = 100.*float(correct)/float(total)
+            progress_bar(batch_idx, len(dataloader),
+                         'Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                         (test_loss / (batch_idx + 1),
+                          100. * float(correct) / float(total),
+                          correct, total))
+        acc = 100. * float(correct) / float(total)
     return (test_loss/batch_idx, acc)
 
 
-def test_adver(dataloader, adversary):
+def test_adver(dataloader, adversary, is_targeted):
     net.eval()
     test_loss = 0
     correct = 0
     total = 0
-    for batch_idx, (inputs, targets) in enumerate(dataloader):
+    for batch_idx, (inputs, orig_targets) in enumerate(dataloader):
         if use_cuda:
-            inputs, targets = inputs.cuda(), targets.cuda()
-        adv_untargeted = adversary.perturb(inputs, targets)
-        outputs = net(adv_untargeted)
-        loss = cel(outputs, targets)
+            inputs, orig_targets = inputs.cuda(), orig_targets.cuda()
+        if is_targeted:
+            #targets = (clntarget + 1) % 10
+            output = net(inputs)
+            targets = output.argsort()[:, 0]  # target least-likely class
+            advdata = adversary.perturb(inputs, targets)
+        else:
+            advdata = adversary.perturb(inputs, orig_targets)
+        outputs = net(advdata)
+        loss = cel(outputs, orig_targets)
         test_loss += loss.item()
         _, predicted = torch.max(outputs.data, 1)
-        total += targets.size(0)
-        correct += predicted.eq(targets.data).cpu().sum()
-        progress_bar(batch_idx, len(dataloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-            % (test_loss/(batch_idx+1), 100.*float(correct)/float(total),
-               correct, total))
-        acc = 100.*float(correct)/float(total)
-    return (test_loss/batch_idx, acc)
+        total += orig_targets.size(0)
+        correct += predicted.eq(orig_targets.data).cpu().sum()
+        progress_bar(batch_idx, len(dataloader),
+                     'Loss: %.3f | Acc: %.3f%% (%d/%d)' %
+                     (test_loss / (batch_idx + 1),
+                      100. * float(correct) / float(total),
+                      correct, total))
+        acc = 100. * float(correct) / float(total)
+    return (test_loss / batch_idx, acc)
 
-#train_loss, train_acc = test(trainloader)
-#test_loss, test_acc = test(testloader)
-#test_loss, test_acc = test(testloader, do_awgn=True)
 
+targeted = True if args.tgt else False
+print('targeted ')
+print(targeted)
 epsilons = np.arange(args.max_epsilon)
 stats = np.zeros((len(epsilons), 2))
-
 for i, eps in enumerate(epsilons):
-    base_epsilon = eps / 255.
-    if args.l2:
-        l2_epsilon = np.sqrt(3 * 32 * 32) * base_epsilon
-        l2_eps_iter = l2_epsilon / (args.nb_iter * 0.75)
-        print(l2_epsilon)
-        print(l2_eps_iter)
-        adversary = L2PGDAttack(
-            net, loss_fn=nn.CrossEntropyLoss(reduction="sum"),
-            eps=l2_epsilon, nb_iter=args.nb_iter, eps_iter=l2_eps_iter,
-            rand_init=False, clip_min=0., clip_max=1., targeted=False)
+    if i == 0:
+        adver_lss, adver_acc = test(testloader)
     else:
-        linf_eps_iter = base_epsilon / (args.nb_iter * 0.75)
-        print(base_epsilon)
-        print(linf_eps_iter)
-        adversary = LinfPGDAttack(
-            net, loss_fn=nn.CrossEntropyLoss(reduction="sum"),
-            eps=base_epsilon, nb_iter=args.nb_iter, eps_iter=linf_eps_iter,
-            rand_init=False, clip_min=0., clip_max=1., targeted=False)
+        base_epsilon = eps / 255.
+        if args.l2:
+            l2_epsilon = np.sqrt(3 * 32 * 32) * base_epsilon
+            #l2_epsilon = 10 * base_epsilon
+            l2_eps_iter = l2_epsilon / (args.nb_iter * 0.75)
+            print(l2_epsilon)
+            print(l2_eps_iter)
+            adversary = L2PGDAttack(
+                net, loss_fn=nn.CrossEntropyLoss(reduction="sum"),
+                eps=l2_epsilon, nb_iter=args.nb_iter, eps_iter=l2_eps_iter,
+                rand_init=False, clip_min=0., clip_max=1., targeted=targeted)
+        else:
+            linf_eps_iter = base_epsilon / (args.nb_iter * 0.75)
+            print(base_epsilon)
+            print(linf_eps_iter)
+            adversary = LinfPGDAttack(
+                net, loss_fn=nn.CrossEntropyLoss(reduction="sum"),
+                eps=base_epsilon, nb_iter=args.nb_iter, eps_iter=linf_eps_iter,
+                rand_init=False, clip_min=0., clip_max=1., targeted=targeted)
 
-    adver_lss, adver_acc = test_adver(testloader, adversary)
-    print('%d, %f' % (eps, adver_acc))
+        adver_lss, adver_acc = test_adver(testloader, adversary, targeted)
+        print('%d, %f' % (eps, adver_acc))
     stats[i, 0] = adver_lss
     stats[i, 1] = adver_acc
 
@@ -182,6 +198,9 @@ if args.l2:
     output_file += '_2_'
 else:
     output_file += '_inf_'
+
+if targeted:
+    output_file += '_tgt_ll'
 output_file += args.resume.split('/')[-1].split('.')[0] + '.npy'
 print(output_file)
 np.save(output_file, stats)
